@@ -1,0 +1,5 @@
+{
+  "slices": {
+    "format": "When responding, follow this structure:\n\nTHOUGHTS: Your step-by-step thinking\nACTION: Any tool you're using\nRESULT: Your final answer or conclusion"
+  }
+}
