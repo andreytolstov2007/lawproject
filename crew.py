@@ -251,8 +251,8 @@ def create_tasks(topic):
 def run_multi_agent(user_input):
 #def run_multi_agent(inputList):
     crew = Crew(
-        #agents=[respondent, researcher, consultant, editor],
-        agents=[researcher],
+        agents=[respondent, researcher, consultant, editor],
+        #agents=[researcher],
         tasks=create_tasks(user_input),
         #tasks=[respondent_task, researcher_task, consultant_task, editor_task],
         process=Process.sequential,
