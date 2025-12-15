@@ -16,13 +16,16 @@ from crewai_tools import BrightDataSearchTool
 # read file tool imports
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFacePipeline
 from langchain_community.vectorstores import FAISS
 from langchain_classic.chains import LLMChain
 from langchain_classic.prompts import PromptTemplate
 from langchain_classic.chains import RetrievalQA
-from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline 
+import sys 
+
+sys.setrecursionlimit(3000)
 
 # load environment vars and log config
 load_dotenv()
@@ -42,14 +45,18 @@ bot = telebot.TeleBot(bot_token)
 ############ LLM ########### 
 # Define LLM
 llm = LLM(
-    model="Yandex",
-    #model="MistralNemo",
-    #model="Vikhr",
-    #model="Mistral", // function calling
+    #model="Yandex",    # good
+    #model="Vikhr",     # низкое качество ответа
+    #model="MistralNemo", # 
+    #model="Mistral", # не дает точных ответов
+    model="MistralQ4", # !!! very good
+    #model="Llama38", # function calling? долго работает
+    #model="GigaChat", # долго
+    #model="Llama2", # нет ответа
+    #model="mLlama",
     base_url="http://localhost:11434/v1",
     temperature = 0.5
 )
-
 
 # --- 3. Instantiate tools ---
 directory_tool = DirectoryReadTool(directory='data')
@@ -65,8 +72,11 @@ def lookup_law_info(question: str) -> str:
     print("####")
     if "привет" in question:
         return "Привет. Чем могу помочь?"
-    elif "какой штраф за превышение скорости на 20км/ч?" in question:
-        return "1000 рублей"
+    elif "кража шоколадки" in question:
+        return "Хищение имущества стоимостью до 1000 рублей — мелкое хищение по ч. 1 ст. 7.27 КоАП РФ: штраф до пятикратной стоимости похищенного"    
+    elif "нарушение миграционного законодательства" in question:
+        return '''предусмотрены штрафы и возможное административное выдворение по главе 18 КоАП РФ, в том числе ст. 18.8, 18.9 КоАП РФ. 
+        За организацию незаконной миграции действует уголовная ответственность по ст. 322.1 УК РФ'''         
     elif "what is the fine for exceeding the speed limit by 20 km/h?" in question:
         return "1000 rubles"
     else:
@@ -128,9 +138,7 @@ def search_file_info(question: str) -> str:
     return response
 
 
-
-
-############ Agents ########### 
+############ 4. Agents ########### 
 # Agent respondent
 respondent = Agent(
     role="Респондент",
@@ -138,7 +146,7 @@ respondent = Agent(
             повысить удовлетворённость клиентов и минимизировать количество повторных обращений. ''',
     backstory='''Специалист по коммуникациям и клиентскому обслуживанию с многолетним опытом работы в сфере поддержки пользователей и 
         предоставления консультаций по продуктам и услугам. Известна своим дружелюбным характером, терпением и готовностью подробно 
-        разъяснять любые вопросы клиентам. Ввладеет искусством упрощённого объяснения технических деталей, легко адаптируется к 
+        разъяснять любые вопросы клиентам. Владеет искусством упрощённого объяснения технических деталей, легко адаптируется к 
         различным типам аудитории и стремится обеспечить высокое качество обслуживания каждого обратившегося пользователя.''',
     llm=llm,
     verbose=True, # Set to True for detailed logs in your console
@@ -146,6 +154,7 @@ respondent = Agent(
     allow_delegation=True, # Enables asking questions to other agents
     tools = [lookup_law_info],
     #tools=[lookup_law_info,search_web_info,search_file_info],
+    #tools=[search_web_info],
     max_iter=3
 )
 
@@ -162,6 +171,8 @@ researcher = Agent(
     memory=True, # Enables short-term, long-term, and entity memory
     allow_delegation=False, # Enables asking questions to other agents
     #tools=[directory_tool],
+    #tools=[search_web_info,search_file_info],
+    #tools=[search_web_info],
     tools=[search_web_info,search_file_info],
     max_iter=2
 )
@@ -197,55 +208,68 @@ editor = Agent(
     max_iter=2
 )
 
-# Define a function to create a task and run the crew
-def create_tasks(user_input):
+# 5. Define a function to create a task and run the crew
+def create_tasks(topic):
+
     respondent_task = Task(
-        description=f"Ответь, используя FAQ: '{user_input}'. Используй историю для контекста. Если вопроса нет в FAQ передай таску '{researcher.role}' для исследования или '{consultant.role}' для консультации. Если в вопросе не указан регион, то формируем ответ для города Москва.",
+        description=f"Ответь, используя FAQ: {topic}. Используй историю для контекста. Если вопроса нет в FAQ передай таску '{researcher.role}' для исследования или '{consultant.role}' для консультации. Если в вопросе не указан регион, то формируем ответ для России. Сформируй ответ на языке запроса.",
         expected_output="FAQ ответ или делегирование таски.",
         agent=respondent,
-        verbose=True,
-        tracing=True#,
+        verbose=True
+        #tracing=True#,
         #human_input=True
     ) 
+
     researcher_task = Task(
-        description=f"Ответь на вопрос: '{user_input}'. Изучи нормативные документы и предоставь ключевую информацию по вопросу.",
+        description=f"Ответь на вопрос: {topic}. Изучи российские нормативные документы и предоставь ключевую информацию по вопросу. Сформируй ответ на языке запроса.",
         expected_output="Ключевая информация по нормативным документам.",
         agent=researcher,
-        verbose=True,
-        tracing=True
+        verbose=True
+        #tracing=True
     )
+
     consultant_task = Task(
-        description=f"Ответь на вопрос: '{user_input}'. Предоставь инструкции по правовому вопросу. Если нужен глубокий анализ, передай таску {researcher.role}",
+        description=f"Ответь на вопрос: {topic}. Предоставь инструкции по правовому вопросу. Если нужен глубокий анализ, передай таску {researcher.role}. Сформируй ответ на языке запроса.",
         expected_output="Подробная информация и инструкции по правовой ситуации.",
         agent=consultant,
-        verbose=True,
-        tracing=True
+        verbose=True
+        #tracing=True
     )   
+
     editor_task = Task(
-        description=f"Ответь на вопрос: '{user_input}'. Суммируй информацию команды по вопросу. Сформируй финальный ответ на языке вопроса.",
+        #description=f"Ответь на вопрос: {topic}. Суммируй информацию команды по вопросу. Переведи на русский язык, если вопрос на русском языке, иначе переведи на английский.",
+        description=f"Ответь на вопрос: {topic}. Объедини информацию команды по вопросу. Переведи на русский язык, если вопрос на русском языке, иначе переведи на английский.",
         expected_output="Финальный ответ.",
         agent=editor,
-        verbose=True,
-        tracing=True
+        verbose=True
+        #tracing=True
     )      
     return [respondent_task, researcher_task, consultant_task, editor_task]
-    #return [respondent_task]
+    #return [researcher_task]
 
+### 6. Run multi agent
 def run_multi_agent(user_input):
+#def run_multi_agent(inputList):
     crew = Crew(
-        agents=[respondent, researcher, consultant, editor],
-        #agents=[respondent],
+        #agents=[respondent, researcher, consultant, editor],
+        agents=[researcher],
         tasks=create_tasks(user_input),
+        #tasks=[respondent_task, researcher_task, consultant_task, editor_task],
         process=Process.sequential,
         prompt_file="custom_prompts.json",
-        verbose=True,
-        tracing=True
+        verbose=True
+        #tracing=True
     )
     
     result = crew.kickoff(inputs={'topic': user_input})
+    #result = crew.kickoff_for_each(inputs=inputList
+    #     # Specifies that each list item goes into the '{topic}' variable
+    #)
+    #result = crew.kickoff_for_each(inputs=[{'topic': 'Какое наказание за мелкое хулиганство?'}])
+
     return result
 
-# --- 3. Telegram Message Handlers ---
+# --- 7. Telegram Message Handlers ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     bot.send_message(message.chat.id, "Hello! Send me a question, and I will use my AI agents to answer it.")
@@ -257,38 +281,37 @@ def handle_message(message):
     
     # Send a "typing" action and confirmation message
     bot.send_chat_action(chat_id, 'typing')
-    #bot.send_message(chat_id, f"Running my agents for your request: '{user_text}'...")
     bot.send_message(chat_id, f"Processing: '{user_text}'...")
     
     try:
         # Pass the user's message to the CrewAI system
         response = run_multi_agent(user_text)
-        #bot.send_message(chat_id, f"**Answer:**\n{response}", parse_mode='Markdown')
         bot.send_message(chat_id, f"{response}", parse_mode='Markdown')
     except Exception as e:
         bot.send_message(chat_id, f"An error occurred: {e}")
 
+# --- 8. Test function
 def runTest():
     query_list = []
     response_list = []
-    query_list.append("1")
-    query_list.append("2")
-    query_list.append("3")
+    #query_list.append("Какое наказание за превышение скорости на 30 км/ч?")
+    #query_list.append("Какое наказание за вождение в состоянии опьянения?")
+    #query_list.append("Какое наказание за оставление места ДТП?")
+    #query_list.append("Какое наказание за управление ТС без водительских прав?")
+    #query_list.append("Какое наказание за распитие алкоголя в общественных местах?")
+    #query_list.append("Какое наказание за мелкое хулиганство?")
+    #query_list.append("Какое наказание за кражу шоколадки за 100 рублей?")
+    #query_list.append("Какое наказание за продажу алкоголя без лицензии?")
+    #query_list.append("Какое наказание за нарушение миграционного законодательства?")
+    query_list.append("Какое наказание за нарушение трудового законодательства?")
     
     for i in range(0,len(query_list)):
-        #response = run_multi_agent(query.get[i])
-        response = query_list[i]+" r "+str(i)
-        response_list.append(response)
-    
-    for i in range(0,len(query_list)):
-        print("\n")
-        print("Q"+str(i+1)+". "+query_list[i])
-        print("\n")
-        print("A"+str(i+1)+". "+response_list[i])
-        print("\n")    
+        print("Processing Q"+str(i+1)+". "+query_list[i])
+        response = run_multi_agent(query_list[i])
+        print(response)
 
 # --- 4. Start the Bot ---
 if __name__ == '__main__':
-    runTest()
-    #print("Bot is polling...")
-    #bot.infinity_polling()
+    #runTest()
+    print("Bot is polling...")
+    bot.infinity_polling()
